@@ -15,7 +15,7 @@ Media tools for the [Pi coding agent](https://github.com/earendil-works/pi-codin
    → model receives: Аудио: "Привет, как дела?"
    ```
 3. **`/transcribe <path> [language]`** — direct command, no LLM round-trip; result shown as a notification.
-4. **Voice notes (Ctrl+N or F9)** — press to start recording from the microphone, press again to stop. The audio is transcribed on the GPU and inserted into Pi **as a user prompt**. A copy of every recording is archived in `~/.pi/agent/voicenotes/rec-*.wav`.
+4. **Voice notes (Ctrl+N or F9)** — press to start recording from the microphone, press again to stop. The audio is transcribed on the GPU and **pasted into the input field** — you review it and press Enter yourself. A copy of every recording is archived in `~/.pi/agent/voicenotes/rec-*.wav`.
 
 ## Requirements
 
@@ -65,7 +65,7 @@ An `input` hook scans the user message for path-like tokens ending in an audio e
 - Stop: a `q` is written to ffmpeg's stdin for a graceful quit (WAV header finalized); SIGTERM alone is unreliable on Windows, so a hard kill is the fallback after 5 s.
 - Recordings shorter than ~0.5 s are discarded as accidental taps.
 - **Noise filter**: whisper reports a confidence per result. If `probability < 0.5` *and* duration ≤ 3 s → almost certainly silence/background noise: the note is discarded (but archived) and the model isn't spammed. If it's longer but still low-confidence, it is inserted with a `[voice note, low confidence X]` marker so the model can judge for itself.
-- Injection uses `pi.sendUserMessage()`; while Pi is busy the message goes in as a **followUp** instead of interrupting the current turn.
+- The result is pasted into the editor via `ctx.ui.pasteToEditor()` (inserts at the cursor, doesn't clobber existing input) — sending stays manual. In non-TUI modes (`pi -p`, json) there is no editor, so it falls back to `pi.sendUserMessage()`, using a **followUp** delivery while Pi is busy.
 - Status markers live in the footer (`ctx.ui.setStatus("voice", …)`): 🎙 Starting… → Looking for microphone… → Recording… (Ctrl+N / F9 to stop) → ⏳ Transcribing voice note (Ns)… — plus a `processing` guard so double presses during stop→transcribe are ignored.
 
 ### Why Ctrl+N and F9

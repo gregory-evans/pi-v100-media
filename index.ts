@@ -5,7 +5,7 @@
  * 2. Auto-transcription: audio file paths in a user prompt are replaced with the recognized text
  *    (if there was text around the path, the transcription takes the place of the path)
  * 3. Voice note: Ctrl+N or F9 — record from microphone via ffmpeg (dshow), transcribe on V100,
- *    insert the result as a user prompt. A copy is kept in ~/.pi/agent/voicenotes/.
+ *    paste the result into the input field (user reviews and sends it). A copy is kept in ~/.pi/agent/voicenotes/
  *    Works on any keyboard layout (matching is by physical key / control code, not character).
  *
  * Env overrides:
@@ -34,9 +34,11 @@ const NOISE_MAX_SEC = 3;      // …and ≤ this duration → discard outright
 
 // Minimal structural type for the shortcut handler context (jiti erases types; keep it honest)
 type VoiceCtx = {
+  hasUI: boolean;
   ui: {
     notify(msg: string, kind?: "info" | "error"): void;
     setStatus(id: string, text?: string): void;
+    pasteToEditor(text: string): void;
   };
   isIdle(): boolean;
 };
@@ -322,6 +324,12 @@ export default function (pi: ExtensionAPI) {
         const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
         const archived = path.join(VOICENOTES_DIR, `rec-${stamp}.wav`);
         await fs.copyFile(state.file, archived).catch(() => {});
+        // Insert into the input field — user reviews and presses Enter themselves.
+        // Non-TUI modes (print/json) have no editor → fall back to direct send.
+        const insertOrSend = (text: string) => {
+          if (ctx.hasUI) ctx.ui.pasteToEditor(text);
+          else pi.sendUserMessage(text, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+        };
         if (r.text) {
           const p = r.probability ?? 1;
           if (p < LOW_CONFIDENCE && seconds <= NOISE_MAX_SEC) {
@@ -329,14 +337,11 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify(`🔇 Voice note discarded as noise («${r.text}», conf ${p.toFixed(2)}, ${seconds.toFixed(0)}s). Copy: ${archived}`, "info");
           } else if (p < LOW_CONFIDENCE) {
             // Long enough to be real speech, but whisper isn't sure — let the model judge
-            ctx.ui.notify(`Voice note with low confidence (${p.toFixed(2)}) — inserted with a marker. Copy: ${archived}`, "info");
-            pi.sendUserMessage(
-              `[voice note, low confidence ${p.toFixed(2)}] ${r.text}`,
-              ctx.isIdle() ? undefined : { deliverAs: "followUp" }
-            );
+            ctx.ui.notify(`Voice note with low confidence (${p.toFixed(2)}) — inserted into editor with a marker. Copy: ${archived}`, "info");
+            insertOrSend(`[voice note, low confidence ${p.toFixed(2)}] ${r.text}`);
           } else {
-            ctx.ui.notify(`Voice note (${r.language}, ${seconds.toFixed(0)}s) → ${archived}`, "info");
-            pi.sendUserMessage(r.text, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+            ctx.ui.notify(`Voice note (${r.language}, ${seconds.toFixed(0)}s) inserted into editor — press Enter to send. Copy: ${archived}`, "info");
+            insertOrSend(r.text);
           }
         } else {
           ctx.ui.notify("No speech detected", "info");
