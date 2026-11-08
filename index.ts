@@ -5,7 +5,9 @@
  * 2. Auto-transcription: audio file paths in a user prompt are replaced with the recognized text
  *    (if there was text around the path, the transcription takes the place of the path)
  * 3. Voice note: Ctrl+N or F9 — record from microphone via ffmpeg (dshow), transcribe on V100,
- *    paste the result into the input field (user reviews and sends it). A copy is kept in ~/.pi/agent/voicenotes/
+ *    paste the result into the input field (user reviews and sends it).
+ *    Recordings live in the system temp dir and are deleted after transcription
+ *    (kept only when discarded as noise or on failure, for debugging).
  *    Works on any keyboard layout (matching is by physical key / control code, not character).
  *
  * Env overrides:
@@ -27,7 +29,6 @@ const MAX_FILE_BYTES = 500 * 1024 * 1024;
 // forward slashes on purpose: this Node build fails with backslash paths (ENOENT)
 const FFMPEG = process.env.V100_FFMPEG ?? "C:/bin/ffmpeg.exe";
 const MIC_DEVICE_HINT = (process.env.V100_MIC_DEVICE || "").toLowerCase();
-const VOICENOTES_DIR = path.join(os.homedir(), ".pi", "agent", "voicenotes");
 // Voice-note noise filter: low-confidence short recordings are usually silence/noise
 const LOW_CONFIDENCE = 0.5;   // below this — mark as unreliable
 const NOISE_MAX_SEC = 3;      // …and ≤ this duration → discard outright
@@ -319,11 +320,6 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.setStatus("voice", `⏳ Transcribing voice note (${seconds.toFixed(0)}s)…`);
       try {
         const r = await transcribeBuffer(buf, path.basename(state.file));
-        // keep a copy in the voicenotes archive
-        await fs.mkdir(VOICENOTES_DIR, { recursive: true });
-        const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
-        const archived = path.join(VOICENOTES_DIR, `rec-${stamp}.wav`);
-        await fs.copyFile(state.file, archived).catch(() => {});
         // Insert into the input field — user reviews and presses Enter themselves.
         // Non-TUI modes (print/json) have no editor → fall back to direct send.
         const insertOrSend = (text: string) => {
@@ -333,14 +329,18 @@ export default function (pi: ExtensionAPI) {
         if (r.text) {
           const p = r.probability ?? 1;
           if (p < LOW_CONFIDENCE && seconds <= NOISE_MAX_SEC) {
-            // Almost certainly silence/background noise — don't spam the model
-            ctx.ui.notify(`🔇 Voice note discarded as noise («${r.text}», conf ${p.toFixed(2)}, ${seconds.toFixed(0)}s). Copy: ${archived}`, "info");
+            // Almost certainly silence/background noise — don't spam the model.
+            // Keep the temp file so a false positive can be re-checked (OS cleans %TEMP%).
+            ctx.ui.notify(`🔇 Voice note discarded as noise («${r.text}», conf ${p.toFixed(2)}, ${seconds.toFixed(0)}s). Kept: ${state.file}`, "info");
+            processing = false;
+            ctx.ui.setStatus("voice", undefined);
+            return; // file stays in the system temp dir
           } else if (p < LOW_CONFIDENCE) {
             // Long enough to be real speech, but whisper isn't sure — let the model judge
-            ctx.ui.notify(`Voice note with low confidence (${p.toFixed(2)}) — inserted into editor with a marker. Copy: ${archived}`, "info");
+            ctx.ui.notify(`Voice note with low confidence (${p.toFixed(2)}) — inserted into editor with a marker.`, "info");
             insertOrSend(`[voice note, low confidence ${p.toFixed(2)}] ${r.text}`);
           } else {
-            ctx.ui.notify(`Voice note (${r.language}, ${seconds.toFixed(0)}s) inserted into editor — press Enter to send. Copy: ${archived}`, "info");
+            ctx.ui.notify(`Voice note (${r.language}, ${seconds.toFixed(0)}s) inserted into editor — press Enter to send.`, "info");
             insertOrSend(r.text);
           }
         } else {

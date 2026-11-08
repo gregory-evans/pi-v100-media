@@ -15,7 +15,7 @@ Media tools for the [Pi coding agent](https://github.com/earendil-works/pi-codin
    → model receives: Аудио: "Привет, как дела?"
    ```
 3. **`/transcribe <path> [language]`** — direct command, no LLM round-trip; result shown as a notification.
-4. **Voice notes (Ctrl+N or F9)** — press to start recording from the microphone, press again to stop. The audio is transcribed on the GPU and **pasted into the input field** — you review it and press Enter yourself. A copy of every recording is archived in `~/.pi/agent/voicenotes/rec-*.wav`.
+4. **Voice notes (Ctrl+N or F9)** — press to start recording from the microphone, press again to stop. The audio is transcribed on the GPU and **pasted into the input field** — you review it and press Enter yourself. Recordings live in the system temp dir (`%TEMP%/v100-mic-*.wav`) and are deleted once transcribed; nothing accumulates.
 
 ## Requirements
 
@@ -64,7 +64,8 @@ An `input` hook scans the user message for path-like tokens ending in an audio e
 - Recording: `ffmpeg -f dshow -i audio=<device> -ar 16000 -ac 1` → temp WAV. The device name is passed **without** quotes (no shell), and ffmpeg's modern *and* legacy `-list_devices` output formats are parsed.
 - Stop: a `q` is written to ffmpeg's stdin for a graceful quit (WAV header finalized); SIGTERM alone is unreliable on Windows, so a hard kill is the fallback after 5 s.
 - Recordings shorter than ~0.5 s are discarded as accidental taps.
-- **Noise filter**: whisper reports a confidence per result. If `probability < 0.5` *and* duration ≤ 3 s → almost certainly silence/background noise: the note is discarded (but archived) and the model isn't spammed. If it's longer but still low-confidence, it is inserted with a `[voice note, low confidence X]` marker so the model can judge for itself.
+- **Storage**: the recording is written straight to the system temp dir and unlinked after a successful transcription — no permanent archive folder. The file is kept only when the note is discarded as noise or when transcription fails (both notifications show the path, so false positives / errors can be re-checked; the OS cleans `%TEMP%` eventually).
+- **Noise filter**: whisper reports a confidence per result. If `probability < 0.5` *and* duration ≤ 3 s → almost certainly silence/background noise: the note is discarded and the model isn't spammed. If it's longer but still low-confidence, it is inserted with a `[voice note, low confidence X]` marker so the model can judge for itself.
 - The result is pasted into the editor via `ctx.ui.pasteToEditor()` (inserts at the cursor, doesn't clobber existing input) — sending stays manual. In non-TUI modes (`pi -p`, json) there is no editor, so it falls back to `pi.sendUserMessage()`, using a **followUp** delivery while Pi is busy.
 - Status markers live in the footer (`ctx.ui.setStatus("voice", …)`): 🎙 Starting… → Looking for microphone… → Recording… (Ctrl+N / F9 to stop) → ⏳ Transcribing voice note (Ns)… — plus a `processing` guard so double presses during stop→transcribe are ignored.
 
